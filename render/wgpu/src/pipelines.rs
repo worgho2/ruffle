@@ -139,6 +139,13 @@ impl Pipelines {
 
         let complex_blend_bindings =
             vec![Some(&bind_layouts.globals), None, Some(&bind_layouts.blend)];
+        // The alpha blend also reads the coverage of its source.
+        let alpha_blend_bindings = vec![
+            Some(&bind_layouts.globals),
+            None,
+            Some(&bind_layouts.blend),
+            Some(&bind_layouts.coverage),
+        ];
 
         let complex_blend_pipelines = enum_map! {
             blend => create_shape_pipeline(
@@ -148,7 +155,11 @@ impl Pipelines {
                 &shaders.blend_shaders[blend],
                 msaa_sample_count,
                 &VERTEX_BUFFERS_DESCRIPTION_POS,
-                &complex_blend_bindings,
+                if matches!(blend, ComplexBlend::Alpha) {
+                    &alpha_blend_bindings
+                } else {
+                    &complex_blend_bindings
+                },
                 BlendState::REPLACE,
                 0,
                 PrimitiveTopology::TriangleList,

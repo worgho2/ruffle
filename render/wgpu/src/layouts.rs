@@ -9,6 +9,9 @@ pub struct BindLayouts {
     pub bitmap: wgpu::BindGroupLayout,
     pub gradient: wgpu::BindGroupLayout,
     pub blend: wgpu::BindGroupLayout,
+    /// The coverage of the source of a `BlendMode::Alpha` blend, bound next
+    /// to `blend`.
+    pub coverage: wgpu::BindGroupLayout,
     pub alpha_mask: wgpu::BindGroupLayout,
 }
 
@@ -104,6 +107,21 @@ impl BindLayouts {
             label: blend_bind_layout_label.as_deref(),
         });
 
+        let coverage_bind_layout_label = create_debug_label!("Coverage bind group layout");
+        let coverage = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    multisampled: false,
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                },
+                count: None,
+            }],
+            label: coverage_bind_layout_label.as_deref(),
+        });
+
         let gradient_bind_layout_label = create_debug_label!("Gradient shape bind group");
         let gradient = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             entries: &[
@@ -178,6 +196,7 @@ impl BindLayouts {
             bitmap,
             gradient,
             blend,
+            coverage,
             alpha_mask,
         }
     }

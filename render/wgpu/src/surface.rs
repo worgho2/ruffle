@@ -198,6 +198,7 @@ impl Surface {
                     texture,
                     blend_mode: ChunkBlendMode::Shader(shader),
                     needs_stencil,
+                    ..
                 } => {
                     assert!(!needs_stencil, "Shader blend mode not implemented in masks");
                     let parent_blend_buffer =
@@ -234,6 +235,7 @@ impl Surface {
                     texture,
                     blend_mode: ChunkBlendMode::Complex(blend_mode),
                     needs_stencil,
+                    coverage,
                 } => {
                     let parent = match blend_mode {
                         ComplexBlend::Alpha | ComplexBlend::Erase => {
@@ -289,6 +291,20 @@ impl Surface {
                                 ],
                             });
 
+                    let coverage_bind_group = coverage.as_ref().map(|coverage| {
+                        descriptors
+                            .device
+                            .create_bind_group(&wgpu::BindGroupDescriptor {
+                                label: create_debug_label!("Coverage binds {:?}", blend_mode)
+                                    .as_deref(),
+                                layout: &descriptors.bind_layouts.coverage,
+                                entries: &[wgpu::BindGroupEntry {
+                                    binding: 0,
+                                    resource: wgpu::BindingResource::TextureView(coverage.view()),
+                                }],
+                            })
+                    });
+
                     let mut render_pass =
                         draw_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                             label: create_debug_label!(
@@ -334,6 +350,9 @@ impl Surface {
                     }
 
                     render_pass.set_bind_group(2, &blend_bind_group, &[]);
+                    if let Some(coverage_bind_group) = &coverage_bind_group {
+                        render_pass.set_bind_group(3, coverage_bind_group, &[]);
+                    }
 
                     render_pass.set_vertex_buffer(0, descriptors.quad.vertices_pos.slice(..));
                     render_pass.set_index_buffer(

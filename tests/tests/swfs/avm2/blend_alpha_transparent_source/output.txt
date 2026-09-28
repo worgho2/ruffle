@@ -1,0 +1,7 @@
+draw bitmap: 5=ff3366cc 25=0 35=ff3366cc
+draw shape: 5=ff3366cc 25=0 35=ff3366cc
+draw bitmap clipped: 5=ff3366cc 25=ff3366cc 35=ff3366cc
+layer bitmap: 5=ff3366cc 25=0 35=ff3366cc
+layer shape: 5=ff3366cc 25=0 35=ff3366cc
+draw gradient: 5=0 15=0 35=ff3366cc
+layer gradient: 5=0 15=0 35=ff3366cc

@@ -8,6 +8,8 @@ struct VertexOutput {
 @group(2) @binding(0) var parent_texture: texture_2d<f32>;
 @group(2) @binding(1) var current_texture: texture_2d<f32>;
 @group(2) @binding(2) var texture_sampler: sampler;
+// Opaque wherever the source drew a pixel, even a fully transparent one.
+@group(3) @binding(0) var coverage_texture: texture_2d<f32>;
 
 @vertex
 fn main_vertex(in: common__VertexInput) -> VertexOutput {
@@ -22,15 +24,10 @@ fn main_fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     var dst: vec4<f32> = textureSample(parent_texture, texture_sampler, in.uv);
     // src is the pixel that we want to apply
     var src: vec4<f32> = textureSample(current_texture, texture_sampler, in.uv);
+    let coverage = textureSample(coverage_texture, texture_sampler, in.uv).a;
 
-    if (src.a > 0.0) {
-        return vec4<f32>(dst.rgb * src.a, src.a * dst.a);
-    } else {
-        if (true) {
-            // This needs to be in a branch because... reasons. Bug in naga.
-            // https://github.com/gfx-rs/naga/issues/2168
-            discard;
-        }
-        return dst;
-    }
+    // The parent is multiplied by the source alpha wherever the source drew,
+    // so a transparent source pixel clears it, and kept where the source drew
+    // nothing.
+    return mix(dst, dst * src.a, coverage);
 }

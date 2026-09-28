@@ -414,6 +414,9 @@ pub enum Chunk {
         texture: PoolOrArcTexture,
         blend_mode: ChunkBlendMode,
         needs_stencil: bool,
+        /// The coverage of the blended commands, see [`CommandList::coverage`].
+        /// Only `ComplexBlend::Alpha` needs it.
+        coverage: Option<Box<PoolOrArcTexture>>,
     },
 }
 
@@ -703,10 +706,15 @@ impl<'encoder, 'global: 'encoder> WgpuCommandHandler<'encoder, 'global> {
             ));
         }
     }
-}
 
-impl CommandHandler for WgpuCommandHandler<'_, '_> {
-    fn blend(&mut self, commands: CommandList, blend_mode: RenderBlendMode) {
+    /// Draws `commands` onto a fresh texture the size of this surface,
+    /// cleared to `clear_color`.
+    fn draw_offscreen(
+        &mut self,
+        commands: CommandList,
+        clear_color: wgpu::Color,
+        nearest_layer: LayerRef<'encoder>,
+    ) -> CommandTarget {
         let surface = Surface::new(
             self.descriptors,
             self.quality,
@@ -714,13 +722,6 @@ impl CommandHandler for WgpuCommandHandler<'_, '_> {
             self.height,
             wgpu::TextureFormat::Rgba8Unorm,
         );
-        let target_layer = if let RenderBlendMode::Builtin(BlendMode::Layer) = &blend_mode {
-            LayerRef::Current
-        } else {
-            self.nearest_layer
-        };
-        let blend_type = BlendType::from(blend_mode);
-        let clear_color = blend_type.default_color();
         let target = surface.draw_commands(
             RenderTargetMode::FreshWithColor(clear_color),
             self.descriptors,
@@ -729,10 +730,41 @@ impl CommandHandler for WgpuCommandHandler<'_, '_> {
             self.staging_belt,
             self.dynamic_transforms,
             self.draw_encoder,
-            target_layer,
+            nearest_layer,
             self.texture_pool,
         );
         target.ensure_cleared(self.draw_encoder);
+        target
+    }
+}
+
+impl CommandHandler for WgpuCommandHandler<'_, '_> {
+    fn blend(&mut self, commands: CommandList, blend_mode: RenderBlendMode) {
+        let target_layer = if let RenderBlendMode::Builtin(BlendMode::Layer) = &blend_mode {
+            LayerRef::Current
+        } else {
+            self.nearest_layer
+        };
+        let blend_type = BlendType::from(blend_mode);
+
+        // `BlendMode::Alpha` acts on every pixel its source draws, including
+        // fully transparent ones, which the blended texture alone cannot tell
+        // apart from pixels the source does not draw. Its coverage tells them
+        // apart, unless there is no layer to blend onto and the blend is
+        // dropped anyway.
+        let needs_coverage = matches!(blend_type, BlendType::Complex(ComplexBlend::Alpha))
+            && !matches!(self.nearest_layer, LayerRef::None);
+        let coverage = needs_coverage.then(|| {
+            let fill = Matrix::scale(self.width as f32, self.height as f32);
+            let coverage = self.draw_offscreen(
+                commands.coverage(fill),
+                wgpu::Color::TRANSPARENT,
+                LayerRef::None,
+            );
+            Box::new(coverage.take_color_texture())
+        });
+
+        let target = self.draw_offscreen(commands, blend_type.default_color(), target_layer);
 
         // We currently do not support shader blends in masks. In order not to
         // break other parts of the scene, we just fall back to a normal blend.
@@ -810,6 +842,7 @@ impl CommandHandler for WgpuCommandHandler<'_, '_> {
                     texture: target.take_color_texture(),
                     blend_mode: chunk_blend_mode,
                     needs_stencil: self.num_masks > 0,
+                    coverage,
                 });
                 self.needs_stencil = self.num_masks > 0;
             }
@@ -963,42 +996,13 @@ impl CommandHandler for WgpuCommandHandler<'_, '_> {
     }
 
     fn render_alpha_mask(&mut self, maskee_commands: CommandList, mask_commands: CommandList) {
-        let surface = Surface::new(
-            self.descriptors,
-            self.quality,
-            self.width,
-            self.height,
-            wgpu::TextureFormat::Rgba8Unorm,
-        );
-
-        let maskee = surface.draw_commands(
-            RenderTargetMode::FreshWithColor(wgpu::Color::TRANSPARENT),
-            self.descriptors,
-            self.meshes,
-            maskee_commands,
-            self.staging_belt,
-            self.dynamic_transforms,
-            self.draw_encoder,
-            LayerRef::None,
-            self.texture_pool,
-        );
-        maskee.ensure_cleared(self.draw_encoder);
+        let maskee = self.draw_offscreen(maskee_commands, wgpu::Color::TRANSPARENT, LayerRef::None);
         let matrix = Matrix::scale(maskee.width() as f32, maskee.height() as f32);
         let maskee = maskee.take_color_texture();
 
-        let mask = surface.draw_commands(
-            RenderTargetMode::FreshWithColor(wgpu::Color::TRANSPARENT),
-            self.descriptors,
-            self.meshes,
-            mask_commands,
-            self.staging_belt,
-            self.dynamic_transforms,
-            self.draw_encoder,
-            LayerRef::None,
-            self.texture_pool,
-        );
-        mask.ensure_cleared(self.draw_encoder);
-        let mask = mask.take_color_texture();
+        let mask = self
+            .draw_offscreen(mask_commands, wgpu::Color::TRANSPARENT, LayerRef::None)
+            .take_color_texture();
 
         let binds = self
             .descriptors

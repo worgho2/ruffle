@@ -92,6 +92,89 @@ impl CommandList {
     pub fn drawing_mask(&self) -> bool {
         self.maskers_in_progress > 0
     }
+
+    /// Builds the commands that paint `Color::WHITE` over every pixel this
+    /// list draws, and nothing elsewhere: its coverage.
+    ///
+    /// `fill` is the matrix of a rectangle spanning the whole render target.
+    ///
+    /// Masks apply to the coverage as they apply to the content, nested blends
+    /// contribute their own coverage whatever their blend mode, and the
+    /// coverage of an alpha mask is that of its maskee. Strokes are left out,
+    /// as the coverage is painted through masks, which never include them.
+    pub fn coverage(&self, fill: Matrix) -> CommandList {
+        let mut builder = CoverageBuilder {
+            fill,
+            commands: Vec::new(),
+            run: Vec::new(),
+        };
+        builder.visit(self);
+        builder.finish()
+    }
+}
+
+/// Builds the coverage of a command list, see [`CommandList::coverage`].
+///
+/// Every maximal run of drawing commands becomes a mask that the fill
+/// rectangle is painted through, so the fill reaches exactly the pixels the
+/// run draws. Mask commands are copied as they are, so a run inside masked
+/// content is painted through a nested mask.
+struct CoverageBuilder {
+    fill: Matrix,
+    commands: Vec<Command>,
+    /// The drawing commands since the last mask command, not yet painted.
+    run: Vec<Command>,
+}
+
+impl CoverageBuilder {
+    fn visit(&mut self, list: &CommandList) {
+        // Between PushMask and ActivateMask, and between DeactivateMask and
+        // PopMask, the commands define a mask rather than draw content.
+        let mut defining_mask = false;
+        for command in &list.commands {
+            match command {
+                Command::PushMask | Command::DeactivateMask => {
+                    self.paint_run();
+                    self.commands.push(command.clone());
+                    defining_mask = true;
+                }
+                Command::ActivateMask | Command::PopMask => {
+                    self.commands.push(command.clone());
+                    defining_mask = false;
+                }
+                _ if defining_mask => self.commands.push(command.clone()),
+                Command::Blend(commands, _) => self.visit(commands),
+                Command::RenderAlphaMask {
+                    maskee_commands, ..
+                } => self.visit(maskee_commands),
+                _ => self.run.push(command.clone()),
+            }
+        }
+    }
+
+    fn paint_run(&mut self) {
+        if self.run.is_empty() {
+            return;
+        }
+        self.commands.push(Command::PushMask);
+        self.commands.extend(self.run.iter().cloned());
+        self.commands.push(Command::ActivateMask);
+        self.commands.push(Command::DrawRect {
+            color: Color::WHITE,
+            matrix: self.fill,
+        });
+        self.commands.push(Command::DeactivateMask);
+        self.commands.append(&mut self.run);
+        self.commands.push(Command::PopMask);
+    }
+
+    fn finish(mut self) -> CommandList {
+        self.paint_run();
+        CommandList {
+            commands: self.commands,
+            maskers_in_progress: 0,
+        }
+    }
 }
 
 impl CommandHandler for CommandList {
