@@ -392,6 +392,9 @@ struct SubstreamTagReader {
     /// The tag data of the `MovieClip` that contains the streaming audio track.
     data_stream: SubstreamChunksIter,
 
+    /// The substream itself, to know whether more chunks may still come.
+    substream: Substream,
+
     /// The compressed audio data in the most recent `SoundStreamBlock` we've seen, returned by `Iterator::next`.
     current_audio_data: Option<Slice>,
 
@@ -419,6 +422,7 @@ impl SubstreamTagReader {
     fn new(stream_info: &SoundStreamInfo, data_stream: Substream) -> Self {
         Self {
             data_stream: data_stream.iter_chunks(),
+            substream: data_stream,
             compression: stream_info.stream_format.compression,
             wrapping: stream_info.wrapping,
             current_audio_data: None,
@@ -469,9 +473,21 @@ impl Iterator for SubstreamTagReader {
 /// audio stream data for `SoundStreamBlock` tags.
 impl Read for SubstreamTagReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        if self.current_audio_data.is_none() && self.next().is_none() {
+        if self.current_audio_data.is_none() {
+            // Read the state before looking for chunks: chunks appended just
+            // before the substream is closed must not be taken for the end.
+            let is_open = self.substream.is_open();
             //next() fills current_audio_data
-            return Ok(0);
+            if self.next().is_none() {
+                if self.compression == AudioCompression::Mp3 && is_open {
+                    // The next chunk has not been appended yet. MP3 frames may
+                    // take part of their data from the previous frames (the bit
+                    // reservoir), so the MP3 decoder waits for it instead of
+                    // ending the sound and losing that state.
+                    return Err(std::io::ErrorKind::WouldBlock.into());
+                }
+                return Ok(0);
+            }
         }
 
         //At this point, current_audio_data should be full
@@ -541,5 +557,122 @@ impl Iterator for StandardSubstreamDecoder {
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         self.decoder.next()
+    }
+}
+
+#[cfg(all(test, feature = "mp3"))]
+mod tests {
+    use super::*;
+    use flv_rs::{AudioDataType, FlvReader, Header, Tag, TagData};
+    use ruffle_common::buffer::Buffer;
+
+    /// A 444 Hz tone in MPEG-2 Layer III (22050 Hz, stereo, 32 kbps), one MP3
+    /// frame per FLV audio tag. Every frame after the first one has a nonzero
+    /// `main_data_begin`: part of its data is in the bit reservoir, i.e. in the
+    /// previous frames (and FLV tags).
+    ///
+    /// ffmpeg -f lavfi -i "sine=frequency=444:duration=0.25:sample_rate=22050" -af "volume=5" \
+    ///     -ac 2 -c:a libmp3lame -b:a 32k -flvflags no_metadata mp3_22050hz_stereo.flv
+    const MP3_FLV: &[u8] = include_bytes!("decoders/test-assets/mp3_22050hz_stereo.flv");
+
+    /// MPEG-2 Layer III frames hold a single granule.
+    const SAMPLES_PER_FRAME: usize = 576;
+
+    /// The MP3 payload of each audio tag, as slices of `buffer`, like
+    /// `NetStream` hands them to the audio backend.
+    fn mp3_tags(buffer: &Buffer) -> Vec<Slice> {
+        let full = buffer.to_full_slice();
+        let data = full.data();
+        let mut reader = FlvReader::from_source(&data);
+        Header::parse(&mut reader).expect("valid FLV header");
+        let mut tags = vec![];
+        while let Ok(tag) = Tag::parse(&mut reader) {
+            if let TagData::Audio(audio) = tag.data {
+                let AudioDataType::Raw(mp3) = audio.data else {
+                    panic!("MP3 audio tags are raw");
+                };
+                tags.push(full.to_subslice(mp3));
+            }
+        }
+        tags
+    }
+
+    fn stream_info() -> SoundStreamInfo {
+        SoundStreamInfo {
+            wrapping: SoundStreamWrapping::Unwrapped,
+            stream_format: SoundFormat {
+                compression: AudioCompression::Mp3,
+                sample_rate: 22050,
+                is_stereo: true,
+                is_16_bit: true,
+            },
+            num_samples_per_block: 0,
+            latency_seek: 0,
+            extra_data: None,
+        }
+    }
+
+    /// Decodes all the tags in one go, as a plain MP3 file.
+    fn reference_samples(tags: &[Slice]) -> Vec<[i16; 2]> {
+        let mp3: Vec<u8> = tags.iter().flat_map(|tag| tag.data().to_vec()).collect();
+        Mp3Decoder::new(Cursor::new(mp3))
+            .expect("valid MP3")
+            .collect()
+    }
+
+    /// A `NetStream` appends its audio tags to the substream as it reads them,
+    /// so the decoder may run out of data before the next tag arrives. It must
+    /// keep its state (the bit reservoir) and carry on with the next tag,
+    /// instead of ending the sound, which makes `NetStream` start a new decoder
+    /// that has lost the reservoir.
+    #[test]
+    fn mp3_substream_keeps_bit_reservoir_between_tags() {
+        let buffer = Buffer::from(MP3_FLV.to_vec());
+        let tags = mp3_tags(&buffer);
+        assert_eq!(tags.len(), 12);
+        let reference = reference_samples(&tags);
+        assert_eq!(reference.len(), tags.len() * SAMPLES_PER_FRAME);
+
+        let mut substream = Substream::new(buffer);
+        substream.append(tags[0].clone()).expect("same buffer");
+        let mut decoder =
+            make_substream_decoder(&stream_info(), substream.clone()).expect("MP3 decoder");
+
+        let mut decoded = vec![];
+        for tag in &tags[1..] {
+            decoded.extend(decoder.by_ref().take(SAMPLES_PER_FRAME));
+            // The next tag has not arrived yet: silence, not the end of the sound.
+            assert_eq!(decoder.next(), Some([0, 0]), "waiting for the next tag");
+            substream.append(tag.clone()).expect("same buffer");
+        }
+        decoded.extend(decoder.by_ref().take(SAMPLES_PER_FRAME));
+
+        assert_eq!(decoded.len(), reference.len());
+        assert!(
+            decoded == reference,
+            "the tags decoded one at a time must match the whole stream"
+        );
+    }
+
+    /// Once the substream is closed, the decoder plays what is left and ends.
+    #[test]
+    fn mp3_substream_ends_once_closed() {
+        let buffer = Buffer::from(MP3_FLV.to_vec());
+        let tags = mp3_tags(&buffer);
+        let reference = reference_samples(&tags);
+
+        let mut substream = Substream::new(buffer);
+        for tag in &tags {
+            substream.append(tag.clone()).expect("same buffer");
+        }
+        let mut decoder =
+            make_substream_decoder(&stream_info(), substream.clone()).expect("MP3 decoder");
+
+        let decoded: Vec<_> = decoder.by_ref().take(reference.len()).collect();
+        assert!(decoded == reference);
+        assert_eq!(decoder.next(), Some([0, 0]), "still open");
+
+        substream.close();
+        assert_eq!(decoder.next(), None);
     }
 }
