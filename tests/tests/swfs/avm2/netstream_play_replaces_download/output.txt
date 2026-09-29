@@ -1,0 +1,4 @@
+Playing first.flv, then second.flv
+onMetaData duration: 2.05
+bytesLoaded: 5613
+bytesTotal: 5613

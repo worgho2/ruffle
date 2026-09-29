@@ -277,6 +277,13 @@ pub struct NetStreamData<'gc> {
 
     /// True if the stream should play when ticked.
     playing: Cell<bool>,
+
+    /// Identifies the download started by the latest `play` call.
+    ///
+    /// A download only feeds the stream while its ID is still this one: a
+    /// later `play` replaces the source, and the data of the file it abandons
+    /// must not end up in the new source's buffer.
+    load_id: Cell<u32>,
 }
 
 impl Default for NetStreamSource {
@@ -321,6 +328,7 @@ impl<'gc> NetStream<'gc> {
                 url: RefCell::new(None),
                 attached_to: Lock::new(None),
                 playing: Cell::new(false),
+                load_id: Cell::new(0),
             },
         ))
     }
@@ -401,6 +409,12 @@ impl<'gc> NetStream<'gc> {
             context,
             [("code", "NetStream.Buffer.Full"), ("level", "status")],
         );
+    }
+
+    /// Determine if the download identified by `load_id` still feeds this
+    /// stream, i.e. no other `play` call has replaced its source since.
+    pub fn is_current_load(self, load_id: u32) -> bool {
+        self.0.load_id.get() == load_id
     }
 
     /// Indicate that the buffer has finished loading and that no further data
@@ -603,7 +617,9 @@ impl<'gc> NetStream<'gc> {
             self.source().preload_offset.set(0);
             self.reset_buffer(context);
 
-            let future = crate::loader::load_netstream(context, self, request);
+            let load_id = self.0.load_id.get().wrapping_add(1);
+            self.0.load_id.set(load_id);
+            let future = crate::loader::load_netstream(context, self, request, load_id);
 
             context.navigator.spawn_future(future);
         }
@@ -622,6 +638,7 @@ impl<'gc> NetStream<'gc> {
         // NOTE: We do not deactivate the stream here as there may be other
         // work to be done at tick time.
         self.0.playing.set(false);
+        self.close_sound_stream();
 
         if notify {
             self.trigger_status_event(
@@ -647,6 +664,8 @@ impl<'gc> NetStream<'gc> {
 
         if self.0.playing.get() {
             StreamManager::activate(context, self);
+        } else {
+            self.close_sound_stream();
         }
     }
 
@@ -810,6 +829,18 @@ impl<'gc> NetStream<'gc> {
         if !Self::sound_currently_playing(context, source.sound_instance.get()) {
             source.audio_stream.replace(None);
             source.sound_instance.set(None);
+        }
+    }
+
+    /// Indicate that no more audio tags will be appended to the current sound
+    /// stream, so that the audio backend plays the ones it has and then ends
+    /// the sound, instead of waiting for more.
+    ///
+    /// Until then, a decoder that keeps state across tags (MP3's bit
+    /// reservoir) waits when it runs out of tags, and the sound keeps playing.
+    fn close_sound_stream(self) {
+        if let Some((substream, _)) = &*self.source().audio_stream.borrow() {
+            substream.close();
         }
     }
 

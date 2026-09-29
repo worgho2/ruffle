@@ -1,5 +1,5 @@
 use crate::backend::audio::decoders::{Decoder, Mp3Metadata, SeekableDecoder};
-use std::io::{Cursor, Read};
+use std::io::{Cursor, ErrorKind, Read};
 use symphonia::{
     core::{
         self, audio, codecs, errors,
@@ -93,7 +93,19 @@ impl Mp3Decoder {
         }
 
         self.cur_sample = 0;
-        while let Ok(packet) = self.reader.next_packet() {
+        loop {
+            let packet = match self.reader.next_packet() {
+                Ok(packet) => packet,
+                // The source has no data yet, but will have more later (the
+                // audio of a `NetStream`, appended tag by tag). Keep the
+                // reader and the decoder, whose bit reservoir the next frames
+                // need, and try again on the next sample.
+                Err(errors::Error::IoError(e)) if e.kind() == ErrorKind::WouldBlock => {
+                    self.sample_buf.clear();
+                    return;
+                }
+                Err(_) => break,
+            };
             match self.decoder.decode(&packet) {
                 Ok(decoded) => {
                     if self.sample_buf.capacity() < decoded.capacity() {
@@ -125,6 +137,10 @@ impl Iterator for Mp3Decoder {
             self.next_frame();
             if self.stream_ended {
                 return None;
+            }
+            if self.sample_buf.is_empty() {
+                // Waiting for more data: play silence meanwhile.
+                return Some([0, 0]);
             }
         }
 
