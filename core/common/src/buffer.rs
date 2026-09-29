@@ -4,6 +4,7 @@ use gc_arena::Collect;
 use std::fmt::{Debug, Formatter, LowerHex, UpperHex};
 use std::io::{Read, Result as IoResult};
 use std::ops::{Bound, Deref, RangeBounds};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 use thiserror::Error;
 
@@ -257,12 +258,18 @@ pub enum SubstreamError {
 ///
 /// Clones of a `Substream` share a single chunk list, and appending chunks
 /// will extend all clones of the `Substream`.
+///
+/// A `Substream` is open until `close` is called: while it is open, a reader
+/// that has gone through every chunk may get more of them later.
 #[derive(Clone, Debug)]
 pub struct Substream {
     buf: Buffer,
 
     /// Shared list of chunks. Chunks are stored as (start, end) pairs.
     chunks: Arc<RwLock<Vec<(usize, usize)>>>,
+
+    /// Shared flag, cleared once no more chunks will be appended.
+    open: Arc<AtomicBool>,
 }
 
 impl Substream {
@@ -270,7 +277,20 @@ impl Substream {
         Self {
             buf,
             chunks: Arc::new(RwLock::new(vec![])),
+            open: Arc::new(AtomicBool::new(true)),
         }
+    }
+
+    /// Indicate that no more chunks will be appended to the `Substream`.
+    ///
+    /// This affects all clones of the `Substream`.
+    pub fn close(&self) {
+        self.open.store(false, Ordering::Release);
+    }
+
+    /// Determine if more chunks may still be appended to the `Substream`.
+    pub fn is_open(&self) -> bool {
+        self.open.load(Ordering::Acquire)
     }
 
     /// Append another `Slice` onto the end of the `Substream`.
@@ -350,10 +370,7 @@ impl Substream {
 
 impl From<Buffer> for Substream {
     fn from(buf: Buffer) -> Self {
-        Self {
-            buf,
-            chunks: Arc::new(RwLock::new(vec![])),
-        }
+        Self::new(buf)
     }
 }
 
@@ -362,6 +379,7 @@ impl From<Slice> for Substream {
         Self {
             buf: slice.buf,
             chunks: Arc::new(RwLock::new(vec![(slice.start, slice.end)])),
+            open: Arc::new(AtomicBool::new(true)),
         }
     }
 }
@@ -444,7 +462,7 @@ impl UpperHex for SliceRef<'_> {
 
 #[cfg(test)]
 mod test {
-    use crate::buffer::Buffer;
+    use crate::buffer::{Buffer, Substream};
     use std::io::Read;
 
     #[test]
@@ -499,5 +517,16 @@ mod test {
         let result = cursor.read(&mut data);
         assert_eq!(result.unwrap(), slice.len());
         assert_eq!(&data[..slice.len()], &refdata[..]);
+    }
+
+    #[test]
+    fn substream_close_is_shared() {
+        let substream = Substream::new(Buffer::from(vec![0, 1, 2, 3]));
+        let clone = substream.clone();
+        assert!(clone.is_open());
+
+        substream.close();
+
+        assert!(!clone.is_open());
     }
 }

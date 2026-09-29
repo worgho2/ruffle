@@ -1540,10 +1540,15 @@ pub fn load_sound_avm2<'gc>(
 }
 
 /// Buffer video or audio into a NetStream.
+///
+/// `load_id` identifies this download (see `NetStream::is_current_load`): once
+/// another `play` call has replaced the stream's source, the rest of the file
+/// is dropped instead of being appended to the new source.
 pub fn load_netstream<'gc>(
     uc: &UpdateContext<'gc>,
     stream: NetStream<'gc>,
     request: Request,
+    load_id: u32,
 ) -> OwnedFuture<(), Error> {
     let player = uc.player_handle();
     let stream = NetStreamHandle::stash(uc, stream);
@@ -1554,30 +1559,40 @@ pub fn load_netstream<'gc>(
             Ok(mut response) => {
                 let expected_length = response.expected_length();
 
-                player.lock().unwrap().update(|uc| -> Result<(), Error> {
+                let is_current = player.lock().unwrap().update(|uc| {
                     let stream = stream.fetch(uc);
+                    if !stream.is_current_load(load_id) {
+                        return false;
+                    }
                     if let Ok(Some(len)) = expected_length {
                         stream.set_expected_length(len as usize);
                     }
 
-                    Ok(())
-                })?;
+                    true
+                });
+
+                if !is_current {
+                    return Ok(());
+                }
 
                 loop {
                     let chunk = response.next_chunk().await;
                     let is_end = matches!(chunk, Ok(None));
-                    player.lock().unwrap().update(|uc| -> Result<(), Error> {
+                    let is_current = player.lock().unwrap().update(|uc| {
                         let stream = stream.fetch(uc);
+                        if !stream.is_current_load(load_id) {
+                            return false;
+                        }
 
                         match chunk {
                             Ok(Some(mut data)) => stream.load_buffer(uc, &mut data),
                             Ok(None) => stream.finish_buffer(),
                             Err(err) => stream.report_error(err),
                         }
-                        Ok(())
-                    })?;
+                        true
+                    });
 
-                    if is_end {
+                    if is_end || !is_current {
                         break;
                     }
                 }
@@ -1594,7 +1609,9 @@ pub fn load_netstream<'gc>(
                 player.lock().unwrap().update(|uc| {
                     let stream = stream.fetch(uc);
 
-                    stream.report_error(response.error);
+                    if stream.is_current_load(load_id) {
+                        stream.report_error(response.error);
+                    }
                     Ok(())
                 })
             }
