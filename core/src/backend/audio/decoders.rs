@@ -473,16 +473,21 @@ impl Iterator for SubstreamTagReader {
 /// audio stream data for `SoundStreamBlock` tags.
 impl Read for SubstreamTagReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        if self.current_audio_data.is_none() && self.next().is_none() {
+        if self.current_audio_data.is_none() {
+            // Read the state before looking for chunks: chunks appended just
+            // before the substream is closed must not be taken for the end.
+            let is_open = self.substream.is_open();
             //next() fills current_audio_data
-            if self.compression == AudioCompression::Mp3 && self.substream.is_open() {
-                // The next chunk has not been appended yet. MP3 frames may
-                // take part of their data from the previous frames (the bit
-                // reservoir), so the MP3 decoder waits for it instead of
-                // ending the sound and losing that state.
-                return Err(std::io::ErrorKind::WouldBlock.into());
+            if self.next().is_none() {
+                if self.compression == AudioCompression::Mp3 && is_open {
+                    // The next chunk has not been appended yet. MP3 frames may
+                    // take part of their data from the previous frames (the bit
+                    // reservoir), so the MP3 decoder waits for it instead of
+                    // ending the sound and losing that state.
+                    return Err(std::io::ErrorKind::WouldBlock.into());
+                }
+                return Ok(0);
             }
-            return Ok(0);
         }
 
         //At this point, current_audio_data should be full

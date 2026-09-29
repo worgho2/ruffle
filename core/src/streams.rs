@@ -671,33 +671,35 @@ impl<'gc> NetStream<'gc> {
 
     /// Indicates that this `NetStream`'s audio was detached from a `MovieClip` (AVM1)
     pub fn was_detached(self, context: &mut UpdateContext<'gc>) {
-        let source = self.source();
-        if let Some(sound_instance) = source.sound_instance.get() {
-            context
-                .audio_manager
-                .stop_sound(context.audio, sound_instance);
-        }
-
-        source.audio_stream.replace(None);
+        self.stop_sound_stream(context);
         self.set_attached_to(context.gc(), None);
     }
 
     /// Indicates that this `NetStream`'s audio was attached to a `MovieClip` (AVM1)
     pub fn was_attached(self, context: &mut UpdateContext<'gc>, clip: MovieClip<'gc>) {
-        let source = self.source();
-
         // A `NetStream` cannot be attached to two `MovieClip`s at once.
         // Stop the old sound; the new one will stream at the next tag read.
         // TODO: Change this to have `audio_manager` just switch the sound
         // transforms around
-        if let Some(sound_instance) = source.sound_instance.get() {
-            context
-                .audio_manager
-                .stop_sound(context.audio, sound_instance);
+        self.stop_sound_stream(context);
+        self.set_attached_to(context.gc(), Some(clip));
+    }
+
+    /// Stop the current sound stream, so that the next tick starts a new one.
+    ///
+    /// The sound may have been started either through the audio manager or
+    /// on the backend directly, depending on the attachment state at the time,
+    /// so it is stopped through both. Its substream is closed as well, in case
+    /// a decoder still holds it.
+    fn stop_sound_stream(self, context: &mut UpdateContext<'gc>) {
+        let source = self.source();
+        if let Some(instance) = source.sound_instance.take() {
+            context.audio.stop_sound(instance);
+            context.audio_manager.stop_sound(context.audio, instance);
         }
 
+        self.close_sound_stream();
         source.audio_stream.replace(None);
-        self.set_attached_to(context.gc(), Some(clip));
     }
 
     /// Process a parsed FLV audio tag.
@@ -1461,5 +1463,76 @@ impl<'gc> NetStream<'gc> {
         };
 
         Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "audio", feature = "mp3"))]
+mod tests {
+    use super::*;
+    use crate::backend::audio::{
+        AudioBackend, AudioMixer, DecodeError, RegisterError, SoundHandle, SoundInstanceHandle,
+        SoundStreamInfo, SoundTransform, swf,
+    };
+    use crate::impl_audio_mixer_backend;
+    use crate::player::PlayerBuilder;
+    use crate::tag_utils::SwfMovie;
+    use ruffle_common::buffer::Substream;
+
+    /// See `backend::audio::decoders::tests`: 12 MP3 frames, one per tag, each
+    /// one after the first relying on the bit reservoir.
+    const MP3_FLV: &[u8] =
+        include_bytes!("backend/audio/decoders/test-assets/mp3_22050hz_stereo.flv");
+
+    struct MixerBackend {
+        mixer: AudioMixer,
+    }
+
+    impl AudioBackend for MixerBackend {
+        impl_audio_mixer_backend!(mixer);
+        fn play(&mut self) {}
+        fn pause(&mut self) {}
+    }
+
+    /// AVM1's `MovieClip.attachAudio` on a `NetStream` whose audio is already
+    /// playing unattached, i.e. started on the backend directly. Its decoder
+    /// waits for more tags as long as its substream is open, so the attachment
+    /// must stop it for good, or the attached sound never starts.
+    #[test]
+    fn attaching_stops_unattached_mp3_sound() {
+        let backend = MixerBackend {
+            mixer: AudioMixer::new(2, 44100),
+        };
+        let player = PlayerBuilder::new()
+            .with_audio(backend)
+            .with_movie(SwfMovie::empty(8, None))
+            .build();
+        let mut player = player.lock().unwrap();
+        player.mutate_with_update_context(|context| {
+            let stream = NetStream::new_avm2(context.gc());
+            stream.play(context, None);
+            stream.load_buffer(context, &mut MP3_FLV.to_vec());
+            stream.finish_buffer();
+            stream.tick(context, FloatDuration::from_millis(40.0));
+
+            let unattached = stream.source().sound_instance.get();
+            assert!(NetStream::sound_currently_playing(context, unattached));
+            let substream: Substream = stream
+                .source()
+                .audio_stream
+                .borrow()
+                .as_ref()
+                .map(|(substream, _)| substream.clone())
+                .expect("audio stream");
+
+            let root = context.stage.root_clip().expect("root");
+            let clip = root.as_movie_clip().expect("root clip");
+            stream.was_attached(context, clip);
+            assert!(!NetStream::sound_currently_playing(context, unattached));
+            assert!(!substream.is_open());
+
+            stream.tick(context, FloatDuration::from_millis(40.0));
+            let attached = stream.source().sound_instance.get().expect("new sound");
+            assert!(context.audio_manager.is_sound_playing(attached));
+        });
     }
 }

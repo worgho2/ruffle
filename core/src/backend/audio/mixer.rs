@@ -1104,7 +1104,7 @@ macro_rules! impl_audio_mixer_backend {
         #[inline]
         fn start_substream(
             &mut self,
-            stream_data: ruffle_core::backend::audio::Substream,
+            stream_data: $crate::backend::audio::Substream,
             stream_info: &SoundStreamInfo,
         ) -> Result<SoundInstanceHandle, DecodeError> {
             self.$mixer.start_substream(stream_data, stream_info)
