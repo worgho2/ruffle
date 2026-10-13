@@ -537,6 +537,12 @@ pub fn get_objects_under_point<'gc>(
         HitTestOptions::SKIP_MASK | HitTestOptions::SKIP_INVISIBLE | HitTestOptions::SKIP_CHILDREN;
 
     while let Some(child) = children.pop() {
+        // An invisible object hides its whole subtree, this container included
+        // (but not its own ancestors).
+        if !child.visible() {
+            continue;
+        }
+
         let obj = child.object2();
         if let Some(obj) = obj {
             let obj: Object<'gc> = obj.into();

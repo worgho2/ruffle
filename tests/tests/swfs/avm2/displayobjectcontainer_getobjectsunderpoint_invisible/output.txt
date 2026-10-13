@@ -1,0 +1,14 @@
+stage.getObjectsUnderPoint: [belowCell]
+root.getObjectsUnderPoint: [belowCell]
+hidden.getObjectsUnderPoint: []
+inner.getObjectsUnderPoint: [hiddenDeep]
+shown.getObjectsUnderPoint: []
+hidden.hitTestPoint shape=true bounds=true
+hiddenCell.hitTestPoint shape=true bounds=true
+hiddenInner.hitTestPoint shape=true bounds=true
+hiddenDeep.hitTestPoint shape=true bounds=true
+hiddenLeaf.hitTestPoint shape=true bounds=true
+hidden visible again: [belowCell,hidden,hiddenCell,hiddenDeep]
+inner invisible: [belowCell,hidden,hiddenCell]
+root invisible: []
+root invisible, root.getObjectsUnderPoint: []

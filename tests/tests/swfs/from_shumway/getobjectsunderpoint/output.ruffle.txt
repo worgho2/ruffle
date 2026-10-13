@@ -28,9 +28,7 @@ mask: null
 mask: null
 
 invisible elements aren't included:
-count: 1
-elements: [object SimpleButton]
-hits[0].parent: [object MovieClip]
+count: 0
 
 masks *do* affect the result:
 count: 1
