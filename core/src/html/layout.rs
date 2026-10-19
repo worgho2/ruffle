@@ -110,6 +110,13 @@ pub struct LayoutBuilder<'a, 'gc> {
 
     /// The total width of the text field being laid out.
     max_bounds: Twips,
+
+    /// How far tabs moved the cursor on the current line, if at all.
+    ///
+    /// A tab advances the cursor without a box, so the boxes alone miss the
+    /// space a tab takes at the start or the end of a line. Flash counts it
+    /// in the text width.
+    tab_extent: Option<Twips>,
 }
 
 impl<'a, 'gc> LayoutBuilder<'a, 'gc> {
@@ -138,6 +145,7 @@ impl<'a, 'gc> LayoutBuilder<'a, 'gc> {
             has_line_break: false,
             current_line_span: Default::default(),
             max_bounds,
+            tab_extent: None,
             is_input: params.is_input,
             is_word_wrap: params.is_word_wrap,
             font_type: params.font_type,
@@ -364,6 +372,20 @@ impl<'a, 'gc> LayoutBuilder<'a, 'gc> {
             box_count += 1;
         }
 
+        // Flash measures a left-aligned line from its start up to where tabs
+        // moved the cursor; the line is still aligned by its boxes. A centered
+        // or right-aligned line is measured by its boxes, as before: shifted by
+        // an alignment that ignores the tabs, the extent would overshoot.
+        let tab_extent = self.tab_extent.take();
+        if let (Some(tab_extent), swf::TextAlign::Left | swf::TextAlign::Justify) =
+            (tab_extent, self.effective_alignment())
+        {
+            line_size_bounds += BoxBounds::from_position_and_size(
+                Position::from((Twips::ZERO, line_size_bounds.offset_y())),
+                Size::from((tab_extent, Twips::ZERO)),
+            );
+        }
+
         line_size_bounds +=
             Position::from((left_adjustment + align_adjustment, baseline_adjustment));
 
@@ -372,8 +394,9 @@ impl<'a, 'gc> LayoutBuilder<'a, 'gc> {
             line_size_bounds += Size::from((Twips::ZERO, self.max_leading));
         }
 
-        if !self.is_input && is_line_empty && last_line {
-            // For non-input fields, skip the last line if it's empty.
+        if !self.is_input && is_line_empty && tab_extent.is_none() && last_line {
+            // For non-input fields, skip the last line if it's empty (a line
+            // of tabs only is not).
             // For input fields, we have to take the empty line into account,
             // otherwise it wouldn't be possible to click there to input text.
         } else {
@@ -486,6 +509,7 @@ impl<'a, 'gc> LayoutBuilder<'a, 'gc> {
                 }
             }
         }
+        self.tab_extent = Some(max(self.tab_extent.unwrap_or_default(), self.cursor.x()));
     }
 
     /// Enter a new span.
