@@ -45,7 +45,7 @@
 22.85
 //Creating left aligned text w/ wordwrap, multiline, tab stops: 350, 370, 390
 //field.textWidth
-388.3
+390
 //field.textHeight
 89.4
 //Creating center aligned text w/ wordwrap, multiline, tab stops: 350, 370, 390

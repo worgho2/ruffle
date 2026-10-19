@@ -1,0 +1,20 @@
+size 12
+tab only wider than empty: true
+tab+msg wider than msg: true
+2tabs+msg wider than tab+msg: true
+msg+tab wider than msg: true
+a+tab+b wider than ab: true
+32tabs+msg wider than 875: true
+msg+34tabs wider than 875: true
+32tabs+msg+34tabs wider than 32tabs+msg: true
+autoSize width is textWidth + 4: true
+size 14
+tab only wider than empty: true
+tab+msg wider than msg: true
+2tabs+msg wider than tab+msg: true
+msg+tab wider than msg: true
+a+tab+b wider than ab: true
+32tabs+msg wider than 875: true
+msg+34tabs wider than 875: true
+32tabs+msg+34tabs wider than 32tabs+msg: true
+autoSize width is textWidth + 4: true
