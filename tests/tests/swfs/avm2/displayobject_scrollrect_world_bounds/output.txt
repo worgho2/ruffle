@@ -1,0 +1,16 @@
+[object Shape].hitTestPoint(60, 10) = true
+[object Shape].hitTestPoint(60, 10, true) = true
+[object Shape].hitTestPoint(-440, 10) = false
+[object Shape].getBounds(stage) = (x=-450, y=5, w=100, h=20)
+[object Bitmap].hitTestPoint(60, 40) = true
+[object Bitmap].hitTestPoint(60, 40, true) = true
+[object Bitmap].hitTestPoint(-440, 40) = false
+[object Bitmap].getBounds(stage) = (x=-450, y=35, w=100, h=20)
+[object TextField].hitTestPoint(60, 70) = true
+[object TextField].hitTestPoint(60, 70, true) = true
+[object TextField].hitTestPoint(-440, 70) = false
+[object TextField].getBounds(stage) = (x=-450, y=65, w=100, h=20)
+shape.hitTestObject(inView) = true
+inView.hitTestObject(shape) = true
+shape.hitTestObject(shifted) = false
+shifted.hitTestObject(shape) = false
