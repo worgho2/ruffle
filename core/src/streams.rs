@@ -617,6 +617,20 @@ impl<'gc> NetStream<'gc> {
         );
     }
 
+    /// Stop playback and discard the data of the current file
+    /// (`NetStream.close`).
+    ///
+    /// The sound stops, the stream leaves the active list and the source is
+    /// replaced by an empty one, so `time`, `bytesLoaded` and `bytesTotal`
+    /// read 0; a later `play` starts over. Flash Player sends no status event
+    /// for it (test `avm2/netstream_close`).
+    pub fn close(self, context: &mut UpdateContext<'gc>) {
+        self.0.playing.set(false);
+        self.0.url.replace(None);
+        self.reset_buffer(context);
+        StreamManager::deactivate(context, self);
+    }
+
     /// Pause stream playback.
     pub fn pause(self, context: &mut UpdateContext<'gc>, notify: bool) {
         // NOTE: We do not deactivate the stream here as there may be other
