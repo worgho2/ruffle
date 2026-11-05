@@ -299,14 +299,9 @@ package flash.net {
             return [];
         }
 
-        public function get soundTransform():flash.media.SoundTransform {
-            stub_getter("flash.net.NetStream", "soundTransform");
-            return new flash.media.SoundTransform();
-        }
+        public native function get soundTransform():flash.media.SoundTransform;
 
-        public function set soundTransform(tf:flash.media.SoundTransform) {
-            stub_setter("flash.net.NetStream", "soundTransform");
-        }
+        public native function set soundTransform(tf:flash.media.SoundTransform);
 
         public native function get time():Number;
 
