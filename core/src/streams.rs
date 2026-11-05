@@ -14,7 +14,7 @@ use crate::backend::audio::{
 };
 use crate::backend::navigator::Request;
 use crate::context::UpdateContext;
-use crate::display_object::{MovieClip, TDisplayObject};
+use crate::display_object::{MovieClip, SoundTransform, TDisplayObject};
 use crate::loader::Error;
 use crate::string::AvmString;
 use flv_rs::{
@@ -284,6 +284,11 @@ pub struct NetStreamData<'gc> {
     /// later `play` replaces the source, and the data of the file it abandons
     /// must not end up in the new source's buffer.
     load_id: Cell<u32>,
+
+    /// The sound transform applied to this stream's audio
+    /// (`NetStream.soundTransform` in AVM2). It belongs to the stream, so it
+    /// survives `play` and applies to every sound the stream starts.
+    sound_transform: Cell<SoundTransform>,
 }
 
 impl Default for NetStreamSource {
@@ -329,8 +334,47 @@ impl<'gc> NetStream<'gc> {
                 attached_to: Lock::new(None),
                 playing: Cell::new(false),
                 load_id: Cell::new(0),
+                sound_transform: Cell::new(SoundTransform::default()),
             },
         ))
+    }
+
+    /// The sound transform of this stream's audio.
+    pub fn sound_transform(self) -> SoundTransform {
+        self.0.sound_transform.get()
+    }
+
+    /// Set the sound transform of this stream's audio, applying it to the
+    /// sound currently playing, if any.
+    pub fn set_sound_transform(self, context: &mut UpdateContext<'gc>, transform: SoundTransform) {
+        self.0.sound_transform.set(transform);
+        if let Some(instance) = self.source().sound_instance.get() {
+            self.apply_sound_transform(context, instance);
+        }
+    }
+
+    /// Apply this stream's sound transform to one of its sound instances.
+    ///
+    /// A sound attached to a `MovieClip` (AVM1) is owned by the audio manager,
+    /// which combines the local transform with the clip's and the global one.
+    /// Otherwise the sound went straight to the audio backend, so the global
+    /// transform is combined here.
+    fn apply_sound_transform(
+        self,
+        context: &mut UpdateContext<'gc>,
+        instance: SoundInstanceHandle,
+    ) {
+        let transform = self.0.sound_transform.get();
+        if self.0.attached_to.get().is_some() {
+            context
+                .audio_manager
+                .set_local_sound_transform(instance, transform);
+        } else {
+            let global = *context.audio_manager.global_sound_transform();
+            context
+                .audio
+                .set_sound_transform(instance, transform.concat(global).into());
+        }
     }
 
     fn source(self) -> Gc<'gc, NetStreamSource> {
@@ -870,6 +914,7 @@ impl<'gc> NetStream<'gc> {
                     .start_substream(substream.clone(), sound_stream_head)?
             };
             source.sound_instance.set(Some(sound_instance));
+            self.apply_sound_transform(context, sound_instance);
         }
 
         Ok(())

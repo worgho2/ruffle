@@ -1,0 +1,8 @@
+default: 1 0 1 0 0 1
+set 0.25 -0.5: 0.25 -0.48839999999999995 1.22 0 0 0.7
+after editing the returned object: 0.25 -0.48839999999999995 1.22 0 0 0.7
+same object twice: false
+set 0: 0 0 1 0 0 1
+set 0.5: 0.5 0 1 0 0 1
+set null: accepted
+after null: 0.5 0 1 0 0 1

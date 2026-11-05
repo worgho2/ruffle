@@ -2,6 +2,7 @@ use crate::avm2::error::{Error2004Type, make_error_2004};
 use crate::avm2::function::FunctionArgs;
 use crate::avm2::parameters::ParametersExt;
 use crate::avm2::{Activation, Error, Value};
+use crate::display_object::SoundTransform;
 
 pub use crate::avm2::object::netstream_allocator as net_stream_allocator;
 
@@ -153,6 +154,40 @@ pub fn get_time<'gc>(
 
     if let Some(ns) = this.as_netstream() {
         return Ok((ns.time() / 1000.0).into());
+    }
+
+    Ok(Value::Undefined)
+}
+
+/// Implements `NetStream.soundTransform`'s getter
+pub fn get_sound_transform<'gc>(
+    activation: &mut Activation<'_, 'gc>,
+    this: Value<'gc>,
+    _args: FunctionArgs<'_, 'gc>,
+) -> Result<Value<'gc>, Error<'gc>> {
+    let this = this.as_object().unwrap();
+
+    if let Some(ns) = this.as_netstream() {
+        return Ok(ns.sound_transform().into_avm2_object(activation)?.into());
+    }
+
+    Ok(Value::Undefined)
+}
+
+/// Implements `NetStream.soundTransform`'s setter
+pub fn set_sound_transform<'gc>(
+    activation: &mut Activation<'_, 'gc>,
+    this: Value<'gc>,
+    args: FunctionArgs<'_, 'gc>,
+) -> Result<Value<'gc>, Error<'gc>> {
+    let this = this.as_object().unwrap();
+
+    // Flash Player ignores `null` here, without an error, and keeps the
+    // current transform.
+    if let Some(ns) = this.as_netstream()
+        && let Some(as3_st) = args.try_get_object(0)
+    {
+        ns.set_sound_transform(activation.context, SoundTransform::from_avm2_object(as3_st));
     }
 
     Ok(Value::Undefined)
