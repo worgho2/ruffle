@@ -1,0 +1,11 @@
+after close before play: time 0 bytesLoaded 0 bytesTotal 0
+play
+playing before close: true
+after close: time 0 bytesLoaded 0 bytesTotal 0
+two seconds later: time 0 bytesLoaded 0 bytesTotal 0
+second close: ok
+[replay] NetStream.Play.Start
+[replay] NetStream.Buffer.Full
+[replay] NetStream.Buffer.Flush
+[replay] NetStream.Play.Stop
+[replay] NetStream.Buffer.Empty

@@ -677,6 +677,22 @@ impl<'gc> NetStream<'gc> {
         );
     }
 
+    /// Stop playback and discard the data of the current file
+    /// (`NetStream.close`).
+    ///
+    /// The sound stops, the stream leaves the active list and the source is
+    /// replaced by an empty one, so `time`, `bytesLoaded` and `bytesTotal`
+    /// read 0; a later `play` starts over. Flash Player sends no status event
+    /// for it (test `avm2/netstream_close`).
+    pub fn close(self, context: &mut UpdateContext<'gc>) {
+        self.0.playing.set(false);
+        self.0.url.replace(None);
+        // A download still in flight must not feed the closed stream.
+        self.0.load_id.set(self.0.load_id.get().wrapping_add(1));
+        self.reset_buffer(context);
+        StreamManager::deactivate(context, self);
+    }
+
     /// Pause stream playback.
     pub fn pause(self, context: &mut UpdateContext<'gc>, notify: bool) {
         // NOTE: We do not deactivate the stream here as there may be other
@@ -1536,6 +1552,41 @@ mod tests {
         impl_audio_mixer_backend!(mixer);
         fn play(&mut self) {}
         fn pause(&mut self) {}
+    }
+
+    /// `NetStream.close` on a stream playing MP3 audio: the sound stops, the
+    /// next tick does not start it again and the download of the file no
+    /// longer feeds the stream.
+    #[test]
+    fn close_stops_mp3_sound() {
+        let backend = MixerBackend {
+            mixer: AudioMixer::new(2, 44100),
+        };
+        let player = PlayerBuilder::new()
+            .with_audio(backend)
+            .with_movie(SwfMovie::empty(8, None))
+            .build();
+        let mut player = player.lock().unwrap();
+        player.mutate_with_update_context(|context| {
+            let stream = NetStream::new_avm2(context.gc());
+            stream.play(context, None);
+            let load_id = stream.0.load_id.get();
+            stream.load_buffer(context, &mut MP3_FLV.to_vec());
+            stream.finish_buffer();
+            stream.tick(context, FloatDuration::from_millis(40.0));
+
+            let sound = stream.source().sound_instance.get();
+            assert!(NetStream::sound_currently_playing(context, sound));
+
+            stream.close(context);
+            assert!(!NetStream::sound_currently_playing(context, sound));
+            assert!(!stream.is_current_load(load_id));
+            assert_eq!(stream.time(), 0.0);
+            assert_eq!(stream.bytes_loaded(), 0);
+
+            stream.tick(context, FloatDuration::from_millis(40.0));
+            assert!(stream.source().sound_instance.get().is_none());
+        });
     }
 
     /// AVM1's `MovieClip.attachAudio` on a `NetStream` whose audio is already
